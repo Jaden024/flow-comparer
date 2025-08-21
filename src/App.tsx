@@ -38,8 +38,8 @@ interface DetailedComparison {
   headers: ComparisonSection;
   payloads?: ComparisonSection;
   params: ComparisonSection;
-  body?: ComparisonSection;
   response: ComparisonSection;
+  response_body?: ComparisonSection;
 }
 
 interface ComparisonSection {
@@ -65,6 +65,8 @@ function App() {
   const [selectedRequest1, setSelectedRequest1] = useState<HarRequest | null>(null);
   const [selectedRequest2, setSelectedRequest2] = useState<HarRequest | null>(null);
   const [loading, setLoading] = useState(false);
+  const [indexInput1, setIndexInput1] = useState<string>('');
+  const [indexInput2, setIndexInput2] = useState<string>('');
   const [showDetailedComparison, setShowDetailedComparison] = useState(false);
   const [detailedComparisonData, setDetailedComparisonData] = useState<DetailedComparison | null>(null);
 
@@ -75,7 +77,7 @@ function App() {
 
   // Synchronized scrolling handlers
   const handleLeftScroll = useCallback(() => {
-    if (!syncScroll || !alignRequests || isScrollingRef.current) return;
+    if (!syncScroll || isScrollingRef.current) return;
 
     const leftPanel = leftPanelRef.current;
     const rightPanel = rightPanelRef.current;
@@ -87,10 +89,10 @@ function App() {
         isScrollingRef.current = false;
       }, 10);
     }
-  }, [syncScroll, alignRequests]);
+  }, [syncScroll]);
 
   const handleRightScroll = useCallback(() => {
-    if (!syncScroll || !alignRequests || isScrollingRef.current) return;
+    if (!syncScroll || isScrollingRef.current) return;
 
     const leftPanel = leftPanelRef.current;
     const rightPanel = rightPanelRef.current;
@@ -102,59 +104,144 @@ function App() {
         isScrollingRef.current = false;
       }, 10);
     }
-  }, [syncScroll, alignRequests]);
+  }, [syncScroll]);
 
-  // Auto-selection logic
-  const findCorrespondingRequest = useCallback((selectedRequest: HarRequest, targetRequests: HarRequest[]): HarRequest | null => {
-    if (!autoSelect) return null;
+  // Auto-selection logic - select by HTML list position (visual index in requests-list)
+  const findCorrespondingRequest2ByListPosition = useCallback((listPosition: number): { request: HarRequest | null, shouldSelect: boolean } => {
+    if (!autoSelect) return { request: null, shouldSelect: false };
 
-    // First try to find exact match by method and path (without query params for GET)
-    const selectedPath = selectedRequest.method.toUpperCase() === 'GET'
-      ? selectedRequest.path.split('?')[0]
-      : selectedRequest.path;
+    // When using aligned pairs, find the request at the same visual list position
+    if (alignedPairs.length > 0 && listPosition >= 0 && listPosition < alignedPairs.length) {
+      const pair = alignedPairs[listPosition];
+      // Return the request from the right side, or indicate we should select empty placeholder
+      if (pair.index2 !== undefined && harFile2) {
+        return { request: harFile2.requests[pair.index2], shouldSelect: true };
+      } else {
+        // This is an empty placeholder - we should select it (null request)
+        return { request: null, shouldSelect: true };
+      }
+    }
 
-    const exactMatch = targetRequests.find(req => {
-      const reqPath = req.method.toUpperCase() === 'GET'
-        ? req.path.split('?')[0]
-        : req.path;
-      return req.method === selectedRequest.method && reqPath === selectedPath;
-    });
+    // When not using aligned pairs, use direct array index
+    if (harFile2 && listPosition >= 0 && listPosition < harFile2.requests.length) {
+      return { request: harFile2.requests[listPosition], shouldSelect: true };
+    }
 
-    if (exactMatch) return exactMatch;
+    return { request: null, shouldSelect: false };
+  }, [autoSelect, alignedPairs, harFile2]);
 
-    // If no exact match, try to find by path only
-    const pathMatch = targetRequests.find(req => {
-      const reqPath = req.method.toUpperCase() === 'GET'
-        ? req.path.split('?')[0]
-        : req.path;
-      return reqPath === selectedPath;
-    });
+  const findCorrespondingRequest1ByListPosition = useCallback((listPosition: number): { request: HarRequest | null, shouldSelect: boolean } => {
+    if (!autoSelect) return { request: null, shouldSelect: false };
 
-    return pathMatch || null;
-  }, [autoSelect]);
+    // When using aligned pairs, find the request at the same visual list position
+    if (alignedPairs.length > 0 && listPosition >= 0 && listPosition < alignedPairs.length) {
+      const pair = alignedPairs[listPosition];
+      // Return the request from the left side, or indicate we should select empty placeholder
+      if (pair.index1 !== undefined && harFile1) {
+        return { request: harFile1.requests[pair.index1], shouldSelect: true };
+      } else {
+        // This is an empty placeholder - we should select it (null request)
+        return { request: null, shouldSelect: true };
+      }
+    }
 
-  // Enhanced selection handlers with auto-selection
-  const handleSelectRequest1 = useCallback((request: HarRequest) => {
+    // When not using aligned pairs, use direct array index
+    if (harFile1 && listPosition >= 0 && listPosition < harFile1.requests.length) {
+      return { request: harFile1.requests[listPosition], shouldSelect: true };
+    }
+
+    return { request: null, shouldSelect: false };
+  }, [autoSelect, alignedPairs, harFile1]);
+
+  // Enhanced selection handlers with auto-selection by HTML list position
+  const handleSelectRequest1 = useCallback((request: HarRequest | null, htmlListIndex: number) => {
     setSelectedRequest1(request);
+    if (request) {
+      setIndexInput1(request.index.toString()); // Update index input to match selection
+    }
 
-    if (autoSelect && harFile2) {
-      const corresponding = findCorrespondingRequest(request, harFile2.requests);
-      if (corresponding) {
-        setSelectedRequest2(corresponding);
+    if (autoSelect) {
+      const corresponding = findCorrespondingRequest2ByListPosition(htmlListIndex);
+      if (corresponding.shouldSelect) {
+        setSelectedRequest2(corresponding.request);
+        if (corresponding.request) {
+          setIndexInput2(corresponding.request.index.toString());
+        } else {
+          setIndexInput2(''); // Empty placeholder selected
+        }
+      } else {
+        // No corresponding position - clear selection
+        setSelectedRequest2(null);
+        setIndexInput2('');
       }
     }
-  }, [autoSelect, harFile2, findCorrespondingRequest]);
+  }, [autoSelect, findCorrespondingRequest2ByListPosition]);
 
-  const handleSelectRequest2 = useCallback((request: HarRequest) => {
+  const handleSelectRequest2 = useCallback((request: HarRequest | null, htmlListIndex: number) => {
     setSelectedRequest2(request);
+    if (request) {
+      setIndexInput2(request.index.toString()); // Update index input to match selection
+    }
 
-    if (autoSelect && harFile1) {
-      const corresponding = findCorrespondingRequest(request, harFile1.requests);
-      if (corresponding) {
-        setSelectedRequest1(corresponding);
+    if (autoSelect) {
+      const corresponding = findCorrespondingRequest1ByListPosition(htmlListIndex);
+      if (corresponding.shouldSelect) {
+        setSelectedRequest1(corresponding.request);
+        if (corresponding.request) {
+          setIndexInput1(corresponding.request.index.toString());
+        } else {
+          setIndexInput1(''); // Empty placeholder selected
+        }
+      } else {
+        // No corresponding position - clear selection
+        setSelectedRequest1(null);
+        setIndexInput1('');
       }
     }
-  }, [autoSelect, harFile1, findCorrespondingRequest]);
+  }, [autoSelect, findCorrespondingRequest1ByListPosition]);
+
+  // Index input handlers
+  const handleIndexInput1 = useCallback((value: string) => {
+    setIndexInput1(value);
+
+    if (value.trim() === '') {
+      return; // Do nothing if input is empty
+    }
+
+    const index = parseInt(value, 10);
+    if (isNaN(index) || !harFile1) {
+      return;
+    }
+
+    // Find request by index
+    const request = harFile1.requests.find(req => req.index === index);
+    if (request) {
+      // Find the HTML list index for this request
+      const htmlListIndex = harFile1.requests.findIndex(req => req.index === index);
+      handleSelectRequest1(request, htmlListIndex);
+    }
+  }, [harFile1, handleSelectRequest1]);
+
+  const handleIndexInput2 = useCallback((value: string) => {
+    setIndexInput2(value);
+
+    if (value.trim() === '') {
+      return; // Do nothing if input is empty
+    }
+
+    const index = parseInt(value, 10);
+    if (isNaN(index) || !harFile2) {
+      return;
+    }
+
+    // Find request by index
+    const request = harFile2.requests.find(req => req.index === index);
+    if (request) {
+      // Find the HTML list index for this request
+      const htmlListIndex = harFile2.requests.findIndex(req => req.index === index);
+      handleSelectRequest2(request, htmlListIndex);
+    }
+  }, [harFile2, handleSelectRequest2]);
 
   const openHarFile = async (fileNumber: 1 | 2) => {
     setLoading(true);
@@ -248,7 +335,6 @@ function App() {
               type="checkbox"
               checked={syncScroll}
               onChange={(e) => setSyncScroll(e.target.checked)}
-              disabled={!alignRequests}
             />
             Synchronized scrolling
           </label>
@@ -278,13 +364,28 @@ function App() {
           <div className="file-panel">
             <div className="panel-header">
               <h2>Original HAR File</h2>
-              <button
-                onClick={() => openHarFile(1)}
-                className="open-file-btn"
-                disabled={loading}
-              >
-                {loading ? "Loading..." : "Open HAR File"}
-              </button>
+              <div className="panel-controls">
+                <div className="index-input-container">
+                  <label htmlFor="index1">Go to index:</label>
+                  <input
+                    id="index1"
+                    type="number"
+                    value={indexInput1}
+                    onChange={(e) => handleIndexInput1(e.target.value)}
+                    placeholder="Enter index"
+                    className="index-input"
+                    min="0"
+                    disabled={!harFile1}
+                  />
+                </div>
+                <button
+                  onClick={() => openHarFile(1)}
+                  className="open-file-btn"
+                  disabled={loading}
+                >
+                  {loading ? "Loading..." : "Open HAR File"}
+                </button>
+              </div>
             </div>
             {harFile1 && (
               <div className="file-info">
@@ -303,9 +404,9 @@ function App() {
                   return (
                     <div
                       key={index}
-                      className={`request-item ${selectedRequest1 === request ? 'selected' : ''}`}
+                      className={`request-item ${selectedRequest1 === (request || null) ? 'selected' : ''}`}
                       style={{ backgroundColor: getComparisonColor(pair.comparison) }}
-                      onClick={() => request && handleSelectRequest1(request)}
+                      onClick={() => handleSelectRequest1(request || null, index)}
                       onDoubleClick={() => request && selectedRequest2 && openDetailedComparison()}
                     >
                       {request ? (
@@ -326,7 +427,7 @@ function App() {
                   <div
                     key={index}
                     className={`request-item ${selectedRequest1 === request ? 'selected' : ''}`}
-                    onClick={() => handleSelectRequest1(request)}
+                    onClick={() => handleSelectRequest1(request, index)}
                     onDoubleClick={() => selectedRequest2 && openDetailedComparison()}
                   >
                     <span className="index">{request.index}</span>
@@ -344,13 +445,28 @@ function App() {
           <div className="file-panel">
             <div className="panel-header">
               <h2>Comparison HAR File</h2>
-              <button
-                onClick={() => openHarFile(2)}
-                className="open-file-btn"
-                disabled={loading}
-              >
-                {loading ? "Loading..." : "Open HAR File"}
-              </button>
+              <div className="panel-controls">
+                <div className="index-input-container">
+                  <label htmlFor="index2">Go to index:</label>
+                  <input
+                    id="index2"
+                    type="number"
+                    value={indexInput2}
+                    onChange={(e) => handleIndexInput2(e.target.value)}
+                    placeholder="Enter index"
+                    className="index-input"
+                    min="0"
+                    disabled={!harFile2}
+                  />
+                </div>
+                <button
+                  onClick={() => openHarFile(2)}
+                  className="open-file-btn"
+                  disabled={loading}
+                >
+                  {loading ? "Loading..." : "Open HAR File"}
+                </button>
+              </div>
             </div>
             {harFile2 && (
               <div className="file-info">
@@ -369,9 +485,9 @@ function App() {
                   return (
                     <div
                       key={index}
-                      className={`request-item ${selectedRequest2 === request ? 'selected' : ''}`}
+                      className={`request-item ${selectedRequest2 === (request || null) ? 'selected' : ''}`}
                       style={{ backgroundColor: getComparisonColor(pair.comparison) }}
-                      onClick={() => request && handleSelectRequest2(request)}
+                      onClick={() => handleSelectRequest2(request || null, index)}
                       onDoubleClick={() => request && selectedRequest1 && openDetailedComparison()}
                     >
                       {request ? (
@@ -392,7 +508,7 @@ function App() {
                   <div
                     key={index}
                     className={`request-item ${selectedRequest2 === request ? 'selected' : ''}`}
-                    onClick={() => handleSelectRequest2(request)}
+                    onClick={() => handleSelectRequest2(request, index)}
                     onDoubleClick={() => selectedRequest1 && openDetailedComparison()}
                   >
                     <span className="index">{request.index}</span>
@@ -494,20 +610,20 @@ function DetailedComparisonModal({ detailed, req1, req2, onClose }: DetailedComp
           >
             Parameters
           </button>
-          {detailed.body && (
-            <button
-              className={`modal-tab ${activeTab === 'body' ? 'active' : ''}`}
-              onClick={() => setActiveTab('body')}
-            >
-              Request Body
-            </button>
-          )}
           <button
             className={`modal-tab ${activeTab === 'response' ? 'active' : ''}`}
             onClick={() => setActiveTab('response')}
           >
             Response
           </button>
+          {detailed.response_body && (
+            <button
+              className={`modal-tab ${activeTab === 'response_body' ? 'active' : ''}`}
+              onClick={() => setActiveTab('response_body')}
+            >
+              Response Body
+            </button>
+          )}
         </div>
 
         <div className="modal-body">
@@ -531,12 +647,12 @@ function DetailedComparisonModal({ detailed, req1, req2, onClose }: DetailedComp
             <DiffView section={detailed.params} title1="File 1 Parameters" title2="File 2 Parameters" />
           )}
 
-          {activeTab === 'body' && detailed.body && (
-            <DiffView section={detailed.body} title1="File 1 Request Body" title2="File 2 Request Body" />
-          )}
-
           {activeTab === 'response' && (
             <DiffView section={detailed.response} title1="File 1 Response" title2="File 2 Response" />
+          )}
+
+          {activeTab === 'response_body' && detailed.response_body && (
+            <DiffView section={detailed.response_body} title1="File 1 Response Body" title2="File 2 Response Body" />
           )}
         </div>
       </div>

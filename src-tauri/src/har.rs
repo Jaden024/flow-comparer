@@ -337,8 +337,8 @@ pub struct DetailedComparison {
     pub headers: ComparisonSection,
     pub payloads: Option<ComparisonSection>,
     pub params: ComparisonSection,
-    pub body: Option<ComparisonSection>,
     pub response: ComparisonSection,
+    pub response_body: Option<ComparisonSection>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -362,8 +362,8 @@ pub fn create_detailed_comparison(req1: &HarRequest, req2: &HarRequest, keys_onl
         headers: create_headers_section(req1, req2, keys_only),
         payloads: create_payloads_section(req1, req2),
         params: create_params_section(req1, req2, keys_only),
-        body: create_body_section(req1, req2),
         response: create_response_section(req1, req2, keys_only),
+        response_body: create_response_body_section(req1, req2),
     }
 }
 
@@ -588,5 +588,24 @@ fn sort_json_keys(value: &serde_json::Value) -> serde_json::Value {
             serde_json::Value::Array(arr.iter().map(sort_json_keys).collect())
         },
         _ => value.clone(),
+    }
+}
+
+fn create_response_body_section(req1: &HarRequest, req2: &HarRequest) -> Option<ComparisonSection> {
+    if req1.response_body.is_some() || req2.response_body.is_some() {
+        let content1 = req1.response_body.as_ref().map_or("No response body".to_string(), |body| {
+            format_json_string(body)
+        });
+        let content2 = req2.response_body.as_ref().map_or("No response body".to_string(), |body| {
+            format_json_string(body)
+        });
+
+        Some(ComparisonSection {
+            content1,
+            content2,
+            differences: vec![], // React library handles diffing
+        })
+    } else {
+        None
     }
 }
