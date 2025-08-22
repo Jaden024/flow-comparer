@@ -155,10 +155,10 @@ pub fn parse_har_file(content: &str) -> Result<Vec<HarRequest>, Box<dyn std::err
     let mut requests = Vec::new();
 
     for (index, entry) in raw_har.log.entries.iter().enumerate() {
-        match HarRequest::from_raw_entry(entry, index) {
+        match HarRequest::from_raw_entry(entry, index + 1) { // Start index from 1
             Ok(request) => requests.push(request),
             Err(e) => {
-                eprintln!("Warning: Failed to parse entry {}: {}", index, e);
+                eprintln!("Warning: Failed to parse entry {}: {}", index + 1, e);
                 // Continue parsing other entries
             }
         }
@@ -406,24 +406,7 @@ fn create_params_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool)
     }
 }
 
-fn create_body_section(req1: &HarRequest, req2: &HarRequest) -> Option<ComparisonSection> {
-    if req1.post_data.is_some() || req2.post_data.is_some() {
-        let content1 = req1.post_data.as_ref().map_or("No body".to_string(), |body| {
-            format_json_string(body)
-        });
-        let content2 = req2.post_data.as_ref().map_or("No body".to_string(), |body| {
-            format_json_string(body)
-        });
 
-        Some(ComparisonSection {
-            content1,
-            content2,
-            differences: vec![], // React library handles diffing
-        })
-    } else {
-        None
-    }
-}
 
 fn create_response_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool) -> ComparisonSection {
     let content1 = format!(

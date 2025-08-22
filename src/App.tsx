@@ -200,7 +200,7 @@ function App() {
     }
   }, [autoSelect, findCorrespondingRequest1ByListPosition]);
 
-  // Index input handlers
+  // Index input handlers with auto-scroll
   const handleIndexInput1 = useCallback((value: string) => {
     setIndexInput1(value);
 
@@ -216,11 +216,36 @@ function App() {
     // Find request by index
     const request = harFile1.requests.find(req => req.index === index);
     if (request) {
-      // Find the HTML list index for this request
-      const htmlListIndex = harFile1.requests.findIndex(req => req.index === index);
-      handleSelectRequest1(request, htmlListIndex);
+      // Find the HTML list position based on current display mode
+      let htmlListIndex = -1;
+
+      if (alignedPairs.length > 0) {
+        // When using aligned pairs, find the position in the aligned pairs array
+        htmlListIndex = alignedPairs.findIndex(pair =>
+          pair.index1 !== undefined && harFile1.requests[pair.index1]?.index === index
+        );
+      } else {
+        // When not using aligned pairs, find position in the original requests array
+        htmlListIndex = harFile1.requests.findIndex(req => req.index === index);
+      }
+
+      if (htmlListIndex >= 0) {
+        handleSelectRequest1(request, htmlListIndex);
+
+        // Scroll to the selected item
+        setTimeout(() => {
+          const leftPanel = leftPanelRef.current;
+          if (leftPanel) {
+            const requestItems = leftPanel.querySelectorAll('.request-item');
+            const targetItem = requestItems[htmlListIndex];
+            if (targetItem) {
+              targetItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }, 100);
+      }
     }
-  }, [harFile1, handleSelectRequest1]);
+  }, [harFile1, handleSelectRequest1, alignedPairs]);
 
   const handleIndexInput2 = useCallback((value: string) => {
     setIndexInput2(value);
@@ -237,11 +262,36 @@ function App() {
     // Find request by index
     const request = harFile2.requests.find(req => req.index === index);
     if (request) {
-      // Find the HTML list index for this request
-      const htmlListIndex = harFile2.requests.findIndex(req => req.index === index);
-      handleSelectRequest2(request, htmlListIndex);
+      // Find the HTML list position based on current display mode
+      let htmlListIndex = -1;
+
+      if (alignedPairs.length > 0) {
+        // When using aligned pairs, find the position in the aligned pairs array
+        htmlListIndex = alignedPairs.findIndex(pair =>
+          pair.index2 !== undefined && harFile2.requests[pair.index2]?.index === index
+        );
+      } else {
+        // When not using aligned pairs, find position in the original requests array
+        htmlListIndex = harFile2.requests.findIndex(req => req.index === index);
+      }
+
+      if (htmlListIndex >= 0) {
+        handleSelectRequest2(request, htmlListIndex);
+
+        // Scroll to the selected item
+        setTimeout(() => {
+          const rightPanel = rightPanelRef.current;
+          if (rightPanel) {
+            const requestItems = rightPanel.querySelectorAll('.request-item');
+            const targetItem = requestItems[htmlListIndex];
+            if (targetItem) {
+              targetItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }, 100);
+      }
     }
-  }, [harFile2, handleSelectRequest2]);
+  }, [harFile2, handleSelectRequest2, alignedPairs]);
 
   const openHarFile = async (fileNumber: 1 | 2) => {
     setLoading(true);
@@ -668,14 +718,55 @@ interface DiffViewProps {
 }
 
 function DiffView({ section, title1, title2 }: DiffViewProps) {
+  const [copiedButton, setCopiedButton] = useState<string | null>(null);
+
+  const copyToClipboard = async (text: string, side: string, buttonId: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      console.log(`${side} content copied to clipboard`);
+
+      // Show visual feedback
+      setCopiedButton(buttonId);
+      setTimeout(() => {
+        setCopiedButton(null);
+      }, 1500); // Reset after 1.5 seconds
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
   return (
     <div className="professional-diff-container">
+      {/* Custom title bar with copy buttons */}
+      <div className="diff-title-bar">
+        <div className="diff-title-section">
+          <span className="diff-title">{title1}</span>
+          <button
+            className={`copy-button ${copiedButton === 'left' ? 'copied' : ''}`}
+            onClick={() => copyToClipboard(section.content1, title1, 'left')}
+            title={`Copy ${title1} content`}
+          >
+            {copiedButton === 'left' ? '✓' : '📋'}
+          </button>
+        </div>
+        <div className="diff-title-section">
+          <span className="diff-title">{title2}</span>
+          <button
+            className={`copy-button ${copiedButton === 'right' ? 'copied' : ''}`}
+            onClick={() => copyToClipboard(section.content2, title2, 'right')}
+            title={`Copy ${title2} content`}
+          >
+            {copiedButton === 'right' ? '✓' : '📋'}
+          </button>
+        </div>
+      </div>
+
       <ReactDiffViewer
         oldValue={section.content1}
         newValue={section.content2}
         splitView={true}
-        leftTitle={title1}
-        rightTitle={title2}
+        leftTitle=""
+        rightTitle=""
         useDarkTheme={true}
         showDiffOnly={false}
         hideLineNumbers={false}

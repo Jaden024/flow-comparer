@@ -481,20 +481,107 @@ body {
   border-bottom: 1px solid var(--border-color) !important;
 }
 
-/* Modal scrollbar styling */
-.comparison-panel::-webkit-scrollbar {
+/* Modal scrollbar styling - Black theme */
+.comparison-panel::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar {
   width: 8px;
 }
 
-.comparison-panel::-webkit-scrollbar-track {
-  background: var(--bg-tertiary);
+.comparison-panel::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track {
+  background: #1a1a1a;
 }
 
-.comparison-panel::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+.comparison-panel::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb {
+  background: #333333;
   border-radius: 4px;
 }
 
-.comparison-panel::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+.comparison-panel::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: #000000;
+}
+
+/* Custom diff title bar with copy buttons */
+.diff-title-bar {
+  display: flex;
+  background-color: #21262d;
+  border-bottom: 1px solid #30363d;
+}
+
+.diff-title-section {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-right: 1px solid #30363d;
+}
+
+.diff-title-section:last-child {
+  border-right: none;
+}
+
+.diff-title {
+  font-weight: bold;
+  color: #f0f6fc;
+  font-size: 0.875rem;
+}
+
+.copy-button {
+  background: #238636;
+  border: 1px solid #2ea043;
+  border-radius: 4px;
+  color: white;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: 0.5rem;
+}
+
+.copy-button:hover {
+  background: #2ea043;
+  border-color: #46954a;
+  transform: translateY(-1px);
+}
+
+.copy-button:active {
+  transform: translateY(0);
+  background: #1f7a2e;
+}
+
+.copy-button.copied {
+  background: #0969da;
+  border-color: #0969da;
+  animation: copySuccess 0.3s ease;
+}
+
+@keyframes copySuccess {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Force black cursor in detailed comparison */
+.professional-diff-container,
+.professional-diff-container *,
+.modal-body,
+.modal-body * {
+  caret-color: #000000 !important;
+  cursor: default;
+}
+
+.professional-diff-container pre,
+.professional-diff-container code,
+.professional-diff-container textarea,
+.professional-diff-container input[type="text"] {
+  caret-color: #000000 !important;
 }
