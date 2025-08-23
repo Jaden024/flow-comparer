@@ -118,7 +118,7 @@ If you want to build from source or contribute to the project:
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/Jaden024/flow-comparer
    cd flow-comparer
    ```
 
