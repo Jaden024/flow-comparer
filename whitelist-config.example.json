@@ -1,0 +1,38 @@
+{
+    "global": {
+        "headers": [
+            "x-request-id",
+            "x-correlation-id",
+            "date",
+            "timestamp"
+        ],
+        "payload_keys": [
+            "timestamp",
+            "request_id",
+            "session_id"
+        ]
+    },
+    "local": [
+        {
+            "host": "api.example.com",
+            "headers": [
+                "x-api-key",
+                "authorization"
+            ],
+            "payload_keys": [
+                "api_version",
+                "client_id"
+            ]
+        },
+        {
+            "url": "https://example.com/api/v1/users",
+            "headers": [
+                "x-user-token"
+            ],
+            "payload_keys": [
+                "user_id",
+                "last_login"
+            ]
+        }
+    ]
+}

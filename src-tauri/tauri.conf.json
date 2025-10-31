@@ -5,7 +5,7 @@
   "identifier": "com.jaden.flow-comparer",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:3005",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -14,7 +14,8 @@
       {
         "title": "Flow Comparer",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "zoomHotkeysEnabled": true
       }
     ],
     "security": {

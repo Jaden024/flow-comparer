@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import ReactDiffViewer from 'react-diff-viewer-continued';
 import "./App.css";
 
 interface HarRequest {
@@ -46,6 +45,7 @@ interface ComparisonSection {
   content1: string;
   content2: string;
   differences: DiffLine[];
+  whitelisted_keys: string[];
 }
 
 interface DiffLine {
@@ -69,6 +69,7 @@ function App() {
   const [indexInput2, setIndexInput2] = useState<string>('');
   const [showDetailedComparison, setShowDetailedComparison] = useState(false);
   const [detailedComparisonData, setDetailedComparisonData] = useState<DetailedComparison | null>(null);
+  const [whitelistLoaded, setWhitelistLoaded] = useState(false);
 
   // Refs for synchronized scrolling
   const leftPanelRef = useRef<HTMLDivElement>(null);
@@ -312,6 +313,38 @@ function App() {
     }
   };
 
+  const loadWhitelistConfig = async () => {
+    try {
+      const result = await invoke<boolean>("load_whitelist_config");
+      if (result) {
+        setWhitelistLoaded(true);
+        // Trigger re-comparison if both files are loaded
+        if (harFile1 && harFile2 && alignedPairs.length > 0) {
+          await compareFiles();
+        }
+        alert("Whitelist config loaded successfully");
+      }
+    } catch (error) {
+      console.error("Failed to load whitelist config:", error);
+      alert(`Failed to load whitelist config: ${error}`);
+    }
+  };
+
+  const clearWhitelistConfig = async () => {
+    try {
+      await invoke("clear_whitelist_config");
+      setWhitelistLoaded(false);
+      // Trigger re-comparison if both files are loaded
+      if (harFile1 && harFile2 && alignedPairs.length > 0) {
+        await compareFiles();
+      }
+      alert("Whitelist config cleared");
+    } catch (error) {
+      console.error("Failed to clear whitelist config:", error);
+      alert(`Failed to clear whitelist config: ${error}`);
+    }
+  };
+
   const compareFiles = async () => {
     if (!harFile1 || !harFile2) return;
 
@@ -353,6 +386,7 @@ function App() {
     switch (comparison.status) {
       case "match": return "var(--color-match)";
       case "partial": return "var(--color-partial)";
+      case "whitelisted": return "var(--color-whitelisted)";
       default: return "var(--color-different)";
     }
   };
@@ -396,6 +430,14 @@ function App() {
             />
             Auto-select corresponding request
           </label>
+          <button onClick={loadWhitelistConfig} className="compare-btn">
+            {whitelistLoaded ? "Reload Whitelist" : "Load Whitelist"}
+          </button>
+          {whitelistLoaded && (
+            <button onClick={clearWhitelistConfig} className="compare-btn">
+              Clear Whitelist
+            </button>
+          )}
           {harFile1 && harFile2 && (
             <button onClick={compareFiles} className="compare-btn">
               Compare Files
@@ -587,6 +629,10 @@ function App() {
           Partial
         </span>
         <span className="legend-item">
+          <span className="legend-color" style={{ backgroundColor: "var(--color-whitelisted)" }}></span>
+          Whitelisted
+        </span>
+        <span className="legend-item">
           <span className="legend-color" style={{ backgroundColor: "var(--color-different)" }}></span>
           Different
         </span>
@@ -710,15 +756,26 @@ function DetailedComparisonModal({ detailed, req1, req2, onClose }: DetailedComp
   );
 }
 
-// Professional Diff View Component using react-diff-viewer-continued
+// Custom Diff View Component with Whitelist Support
 interface DiffViewProps {
   section: ComparisonSection;
   title1: string;
   title2: string;
 }
 
+interface DiffLineData {
+  lineNum: number;
+  content: string;
+  type: 'same' | 'added' | 'removed' | 'whitelisted';
+}
+
 function DiffView({ section, title1, title2 }: DiffViewProps) {
   const [copiedButton, setCopiedButton] = useState<string | null>(null);
+
+  // Refs for synchronized scrolling
+  const leftPaneRef = useRef<HTMLDivElement>(null);
+  const rightPaneRef = useRef<HTMLDivElement>(null);
+  const isScrollingRef = useRef(false);
 
   const copyToClipboard = async (text: string, side: string, buttonId: string) => {
     try {
@@ -729,14 +786,119 @@ function DiffView({ section, title1, title2 }: DiffViewProps) {
       setCopiedButton(buttonId);
       setTimeout(() => {
         setCopiedButton(null);
-      }, 1500); // Reset after 1.5 seconds
+      }, 1500);
     } catch (err) {
       console.error('Failed to copy text: ', err);
     }
   };
 
+  // Synchronized scrolling handlers
+  const handleLeftScroll = useCallback(() => {
+    if (isScrollingRef.current) return;
+
+    const leftPane = leftPaneRef.current;
+    const rightPane = rightPaneRef.current;
+
+    if (leftPane && rightPane) {
+      isScrollingRef.current = true;
+      rightPane.scrollTop = leftPane.scrollTop;
+      rightPane.scrollLeft = leftPane.scrollLeft;
+      setTimeout(() => {
+        isScrollingRef.current = false;
+      }, 10);
+    }
+  }, []);
+
+  const handleRightScroll = useCallback(() => {
+    if (isScrollingRef.current) return;
+
+    const leftPane = leftPaneRef.current;
+    const rightPane = rightPaneRef.current;
+
+    if (leftPane && rightPane) {
+      isScrollingRef.current = true;
+      leftPane.scrollTop = rightPane.scrollTop;
+      leftPane.scrollLeft = rightPane.scrollLeft;
+      setTimeout(() => {
+        isScrollingRef.current = false;
+      }, 10);
+    }
+  }, []);
+
+  // Simple line-by-line diff algorithm
+  const computeDiff = (): { left: DiffLineData[]; right: DiffLineData[] } => {
+    const lines1 = section.content1.split('\n');
+    const lines2 = section.content2.split('\n');
+    const left: DiffLineData[] = [];
+    const right: DiffLineData[] = [];
+
+    const maxLen = Math.max(lines1.length, lines2.length);
+
+    for (let i = 0; i < maxLen; i++) {
+      const line1 = lines1[i] !== undefined ? lines1[i] : '';
+      const line2 = lines2[i] !== undefined ? lines2[i] : '';
+
+      if (line1 === line2) {
+        // Lines are identical
+        left.push({ lineNum: i + 1, content: line1, type: 'same' });
+        right.push({ lineNum: i + 1, content: line2, type: 'same' });
+      } else {
+        // Lines are different - check if whitelisted
+        const isWhitelisted = isLineWhitelisted(line1, line2, section.whitelisted_keys);
+
+        if (lines1[i] === undefined) {
+          // Line only in right side
+          left.push({ lineNum: i + 1, content: '', type: 'same' });
+          right.push({ lineNum: i + 1, content: line2, type: isWhitelisted ? 'whitelisted' : 'added' });
+        } else if (lines2[i] === undefined) {
+          // Line only in left side
+          left.push({ lineNum: i + 1, content: line1, type: isWhitelisted ? 'whitelisted' : 'removed' });
+          right.push({ lineNum: i + 1, content: '', type: 'same' });
+        } else {
+          // Both lines exist but are different
+          left.push({ lineNum: i + 1, content: line1, type: isWhitelisted ? 'whitelisted' : 'removed' });
+          right.push({ lineNum: i + 1, content: line2, type: isWhitelisted ? 'whitelisted' : 'added' });
+        }
+      }
+    }
+
+    return { left, right };
+  };
+
+  const isLineWhitelisted = (line1: string, line2: string, whitelistedKeys: string[]): boolean => {
+    if (whitelistedKeys.length === 0) return false;
+
+    // Check if the line contains any whitelisted key
+    const lineLower1 = line1.toLowerCase();
+    const lineLower2 = line2.toLowerCase();
+
+    for (const key of whitelistedKeys) {
+      // Check if the line starts with the key (for "key: value" format)
+      if (lineLower1.startsWith(key + ':') || lineLower2.startsWith(key + ':')) {
+        return true;
+      }
+      // Check if the line contains the key as a JSON property (for "key": value format)
+      if (lineLower1.includes(`"${key}"`) || lineLower2.includes(`"${key}"`)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const { left, right } = computeDiff();
+
+  const getLineClass = (type: string): string => {
+    switch (type) {
+      case 'added': return 'diff-line-added';
+      case 'removed': return 'diff-line-removed';
+      case 'whitelisted': return 'diff-line-whitelisted';
+      default: return 'diff-line-same';
+    }
+  };
+
   return (
-    <div className="professional-diff-container">
+    <div className="custom-diff-container">
       {/* Custom title bar with copy buttons */}
       <div className="diff-title-bar">
         <div className="diff-title-section">
@@ -761,54 +923,33 @@ function DiffView({ section, title1, title2 }: DiffViewProps) {
         </div>
       </div>
 
-      <ReactDiffViewer
-        oldValue={section.content1}
-        newValue={section.content2}
-        splitView={true}
-        leftTitle=""
-        rightTitle=""
-        useDarkTheme={true}
-        showDiffOnly={false}
-        hideLineNumbers={false}
-        styles={{
-          variables: {
-            dark: {
-              diffViewerBackground: '#0d1117',
-              diffViewerColor: '#f0f6fc',
-              addedBackground: 'rgba(46, 160, 67, 0.15)',
-              addedColor: '#f0f6fc',
-              removedBackground: 'rgba(248, 81, 73, 0.15)',
-              removedColor: '#f0f6fc',
-              wordAddedBackground: 'rgba(46, 160, 67, 0.4)',
-              wordRemovedBackground: 'rgba(248, 81, 73, 0.4)',
-              addedGutterBackground: 'rgba(46, 160, 67, 0.3)',
-              removedGutterBackground: 'rgba(248, 81, 73, 0.3)',
-              gutterBackground: '#161b22',
-              gutterBackgroundDark: '#21262d',
-              highlightBackground: '#fffbdd',
-              highlightGutterBackground: '#fff5b1',
-              codeFoldGutterBackground: '#21262d',
-              codeFoldBackground: '#161b22',
-              emptyLineBackground: '#0d1117',
-              gutterColor: '#8b949e',
-              addedGutterColor: '#f0f6fc',
-              removedGutterColor: '#f0f6fc',
-              codeFoldContentColor: '#8b949e',
-              diffViewerTitleBackground: '#21262d',
-              diffViewerTitleColor: '#f0f6fc',
-              diffViewerTitleBorderColor: '#30363d',
-            }
-          },
-          diffContainer: {
-            fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-            fontSize: '0.875rem',
-          },
-          titleBlock: {
-            padding: '0.75rem 1rem',
-            fontWeight: 'bold',
-          }
-        }}
-      />
+      {/* Split view diff */}
+      <div className="diff-split-view">
+        <div
+          className="diff-pane"
+          ref={leftPaneRef}
+          onScroll={handleLeftScroll}
+        >
+          {left.map((line, index) => (
+            <div key={index} className={`diff-line ${getLineClass(line.type)}`}>
+              <span className="diff-line-number">{line.content ? line.lineNum : ''}</span>
+              <pre className="diff-line-content">{line.content || ' '}</pre>
+            </div>
+          ))}
+        </div>
+        <div
+          className="diff-pane"
+          ref={rightPaneRef}
+          onScroll={handleRightScroll}
+        >
+          {right.map((line, index) => (
+            <div key={index} className={`diff-line ${getLineClass(line.type)}`}>
+              <span className="diff-line-number">{line.content ? line.lineNum : ''}</span>
+              <pre className="diff-line-content">{line.content || ' '}</pre>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

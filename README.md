@@ -18,6 +18,11 @@ Flow Comparer is a specialized tool designed for web developers, QA engineers, a
 - **Side-by-side comparison** of two HAR files
 - **Smart request matching** based on URL patterns (excludes GET parameters for better matching)
 - **Aligned view** showing corresponding requests between files
+- **Color-coded comparison results**:
+  - **Green**: Requests match completely
+  - **Yellow**: Requests have differences
+  - **Purple**: Requests differ only in whitelisted fields
+  - **Red**: Different paths or unmatched requests
 - **Automatic synchronization** of selection between comparison panels
 
 ### 🔍 **Detailed Request Analysis**
@@ -28,13 +33,28 @@ Flow Comparer is a specialized tool designed for web developers, QA engineers, a
   - Request parameters
   - Response headers
   - Response body content
-- **Professional diff visualization** with syntax highlighting
+- **Custom diff visualization** with intelligent highlighting:
+  - **Green**: Added content
+  - **Red**: Removed content
+  - **Purple**: Whitelisted differences (expected changes)
+  - **Black**: Identical content
+- **Synchronized scrolling** between comparison panes
+- **Word wrap** for long lines with unlimited vertical expansion
 - **Copy functionality** with visual feedback for any content section
+
+### 🎨 **Whitelist Configuration**
+- **Smart difference filtering** to ignore expected changes
+- **Global and local rules** for flexible configuration
+- **Header whitelisting** for dynamic headers (timestamps, request IDs, tokens)
+- **Payload key whitelisting** for JSON fields that are expected to differ
+- **Visual distinction** with purple highlighting for whitelisted differences
+- **Example configuration** included in `whitelist-config.example.json`
 
 ### 🎨 **User Experience**
 - **Dark, professional theme** optimized for long analysis sessions
 - **Responsive design** that works on various screen sizes
 - **Intuitive navigation** with keyboard shortcuts and mouse interactions
+- **Zoom controls** (Ctrl +/-, Ctrl 0 to reset)
 - **Visual feedback** for all user actions (copying, selection, etc.)
 
 ## 🛠️ How It Works
@@ -58,9 +78,73 @@ First, generate HAR files from your web applications:
 
 ### 4. **Detailed Comparison**
 - **Tab-based interface** for different aspects of the request/response
-- **Professional diff view** highlighting differences between files
+- **Custom diff view** with intelligent color-coding:
+  - Green for additions
+  - Red for removals
+  - Purple for whitelisted differences
 - **Copy functionality** for sharing specific content or debugging
 - **Visual indicators** for successful copy operations
+
+### 5. **Whitelist Configuration (Optional)**
+
+Create a whitelist configuration file to mark expected differences with purple color instead of red/green:
+
+#### **Creating a Whitelist Config**
+
+Create a JSON file with the following structure (see `whitelist-config.example.json`):
+
+```json
+{
+  "global": {
+    "headers": [
+      "x-request-id",
+      "x-correlation-id",
+      "date",
+      "timestamp"
+    ],
+    "payload_keys": [
+      "timestamp",
+      "request_id",
+      "session_id"
+    ]
+  },
+  "local": [
+    {
+      "host": "api.example.com",
+      "headers": ["x-api-key", "authorization"],
+      "payload_keys": ["api_version", "client_id"]
+    },
+    {
+      "url": "https://example.com/api/v1/users",
+      "headers": ["x-user-token"],
+      "payload_keys": ["user_id", "last_login"]
+    }
+  ]
+}
+```
+
+#### **Using the Whitelist**
+
+1. Click **"Load Whitelist"** button in the toolbar
+2. Select your JSON configuration file
+3. The app will automatically re-compare the loaded HAR files
+4. Differences in whitelisted fields will now appear in **purple** instead of red/green
+5. Click **"Clear Whitelist"** to remove the configuration and revert to normal comparison
+
+#### **Configuration Options**
+
+- **`global`**: Rules that apply to all requests
+  - `headers`: List of header names (case-insensitive)
+  - `payload_keys`: List of JSON keys in request/response bodies
+- **`local`**: Array of URL/host-specific rules (takes precedence over global)
+  - `host`: Matches if request URL contains this host string
+  - `url`: Matches if request URL contains this URL string
+  - `headers` and `payload_keys`: Same as global
+
+**Use Cases:**
+- Ignore dynamic timestamps, request IDs, or session tokens
+- Filter out authentication headers that differ between environments
+- Focus on meaningful changes by hiding expected variations
 
 ## 🎯 Why Flow Comparer is Needed
 
@@ -139,11 +223,19 @@ If you want to build from source or contribute to the project:
 
 ## 🏗️ Technical Architecture
 
-- **Frontend**: React 18 + TypeScript + Vite for fast development and modern UI
-- **Backend**: Rust + Tauri for secure, fast file processing and cross-platform compatibility
+- **Frontend**: React 19 + TypeScript + Vite for fast development and modern UI
+- **Backend**: Rust + Tauri 2 for secure, fast file processing and cross-platform compatibility
 - **Styling**: Custom CSS with professional dark theme
 - **Parsing**: Robust HAR file parsing with error handling for malformed entries
-- **Diff Engine**: Custom comparison algorithm optimized for HTTP request matching
+- **Diff Engine**: Custom line-by-line comparison algorithm with whitelist support
+- **Diff Viewer**: Custom-built split-view diff component with synchronized scrolling and word wrap
+
+## ⌨️ Keyboard Shortcuts
+
+- **Ctrl + +** or **Ctrl + =** - Zoom in
+- **Ctrl + -** - Zoom out
+- **Ctrl + 0** - Reset zoom to 100%
+- **Double-click** on a request - Open detailed comparison (when both requests are selected)
 
 ## 🤝 Contributing
 
@@ -155,4 +247,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Built with ❤️ for the web development community**
+**Built with ❤️ for the reverse engineering community**

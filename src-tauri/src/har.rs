@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +24,7 @@ pub struct HarFile {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComparisonResult {
-    pub status: String, // "match", "partial", "different"
+    pub status: String, // "match", "partial", "different", "whitelisted"
     pub details: String,
 }
 
@@ -33,6 +33,112 @@ pub struct AlignedPair {
     pub index1: Option<usize>,
     pub index2: Option<usize>,
     pub comparison: Option<ComparisonResult>,
+}
+
+// Whitelist configuration structures
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistConfig {
+    pub global: Option<WhitelistRules>,
+    pub local: Option<Vec<LocalWhitelistRule>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistRules {
+    pub headers: Option<Vec<String>>,
+    pub payload_keys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalWhitelistRule {
+    pub host: Option<String>,
+    pub url: Option<String>,
+    pub headers: Option<Vec<String>>,
+    pub payload_keys: Option<Vec<String>>,
+}
+
+impl WhitelistConfig {
+    pub fn new() -> Self {
+        WhitelistConfig {
+            global: None,
+            local: None,
+        }
+    }
+
+    // Check if a header is whitelisted for a given URL
+    pub fn is_header_whitelisted(&self, header_name: &str, url: &str) -> bool {
+        // Check local rules first
+        if let Some(local_rules) = &self.local {
+            for rule in local_rules {
+                if self.rule_matches_url(rule, url) {
+                    if let Some(headers) = &rule.headers {
+                        if headers.iter().any(|h| h.eq_ignore_ascii_case(header_name)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check global rules
+        if let Some(global) = &self.global {
+            if let Some(headers) = &global.headers {
+                if headers.iter().any(|h| h.eq_ignore_ascii_case(header_name)) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    // Check if a payload key is whitelisted for a given URL
+    pub fn is_payload_key_whitelisted(&self, key_name: &str, url: &str) -> bool {
+        // Check local rules first
+        if let Some(local_rules) = &self.local {
+            for rule in local_rules {
+                if self.rule_matches_url(rule, url) {
+                    if let Some(payload_keys) = &rule.payload_keys {
+                        if payload_keys.contains(&key_name.to_string()) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check global rules
+        if let Some(global) = &self.global {
+            if let Some(payload_keys) = &global.payload_keys {
+                if payload_keys.contains(&key_name.to_string()) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn rule_matches_url(&self, rule: &LocalWhitelistRule, url: &str) -> bool {
+        // Match by URL if specified
+        if let Some(rule_url) = &rule.url {
+            if url.contains(rule_url) {
+                return true;
+            }
+        }
+
+        // Match by host if specified
+        if let Some(rule_host) = &rule.host {
+            if let Ok(parsed_url) = Url::parse(url) {
+                if let Some(host) = parsed_url.host_str() {
+                    if host.contains(rule_host) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
 }
 
 // Raw HAR format structures for parsing
@@ -167,7 +273,21 @@ pub fn parse_har_file(content: &str) -> Result<Vec<HarRequest>, Box<dyn std::err
     Ok(requests)
 }
 
+pub fn parse_whitelist_config(content: &str) -> Result<WhitelistConfig, Box<dyn std::error::Error>> {
+    let config: WhitelistConfig = serde_json::from_str(content)?;
+    Ok(config)
+}
+
 pub fn compare_requests(req1: &HarRequest, req2: &HarRequest, keys_only: bool) -> ComparisonResult {
+    compare_requests_with_whitelist(req1, req2, keys_only, &WhitelistConfig::new())
+}
+
+pub fn compare_requests_with_whitelist(
+    req1: &HarRequest,
+    req2: &HarRequest,
+    _keys_only: bool,
+    whitelist: &WhitelistConfig,
+) -> ComparisonResult {
     // For GET requests, compare only the path without query parameters
     // For other methods, compare the full path
     let path1 = if req1.method.to_uppercase() == "GET" {
@@ -189,58 +309,200 @@ pub fn compare_requests(req1: &HarRequest, req2: &HarRequest, keys_only: bool) -
         };
     }
 
-    if keys_only {
-        // Compare only keys
-        let headers_match = req1.headers.keys().collect::<std::collections::HashSet<_>>()
-            == req2.headers.keys().collect::<std::collections::HashSet<_>>();
+    // Check for differences while tracking whitelisted differences
+    let mut has_non_whitelisted_diff = false;
+    let mut has_whitelisted_diff = false;
 
-        // For GET requests, don't compare query params in matching
-        let params_match = if req1.method.to_uppercase() == "GET" {
-            true // Always consider params as matching for GET requests
-        } else {
-            req1.query_params.keys().collect::<std::collections::HashSet<_>>()
-                == req2.query_params.keys().collect::<std::collections::HashSet<_>>()
-        };
+    // Compare headers
+    let headers_diff = compare_headers_with_whitelist(&req1.headers, &req2.headers, &req1.url, whitelist);
+    if headers_diff.has_non_whitelisted_diff {
+        has_non_whitelisted_diff = true;
+    }
+    if headers_diff.has_whitelisted_diff {
+        has_whitelisted_diff = true;
+    }
 
-        if headers_match && params_match {
-            ComparisonResult {
-                status: "match".to_string(),
-                details: "Keys match".to_string(),
-            }
-        } else {
-            ComparisonResult {
-                status: "partial".to_string(),
-                details: "Keys differ".to_string(),
-            }
+    // Compare query params (skip for GET requests)
+    if req1.method.to_uppercase() != "GET" {
+        if req1.query_params != req2.query_params {
+            has_non_whitelisted_diff = true;
+        }
+    }
+
+    // Compare post data with whitelist consideration
+    if let (Some(data1), Some(data2)) = (&req1.post_data, &req2.post_data) {
+        let payload_diff = compare_payload_with_whitelist(data1, data2, &req1.url, whitelist);
+        if payload_diff.has_non_whitelisted_diff {
+            has_non_whitelisted_diff = true;
+        }
+        if payload_diff.has_whitelisted_diff {
+            has_whitelisted_diff = true;
+        }
+    } else if req1.post_data != req2.post_data {
+        has_non_whitelisted_diff = true;
+    }
+
+    // Method comparison
+    if req1.method != req2.method {
+        has_non_whitelisted_diff = true;
+    }
+
+    // Determine final status
+    if !has_non_whitelisted_diff && !has_whitelisted_diff {
+        ComparisonResult {
+            status: "match".to_string(),
+            details: "Full match".to_string(),
+        }
+    } else if !has_non_whitelisted_diff && has_whitelisted_diff {
+        ComparisonResult {
+            status: "whitelisted".to_string(),
+            details: "Differences only in whitelisted fields".to_string(),
+        }
+    } else if has_non_whitelisted_diff {
+        ComparisonResult {
+            status: "partial".to_string(),
+            details: "Has differences".to_string(),
         }
     } else {
-        // Full comparison
-        // For GET requests, don't compare query params in matching
-        let params_match = if req1.method.to_uppercase() == "GET" {
-            true // Always consider params as matching for GET requests
-        } else {
-            req1.query_params == req2.query_params
-        };
+        ComparisonResult {
+            status: "partial".to_string(),
+            details: "Partial match".to_string(),
+        }
+    }
+}
 
-        if req1.method == req2.method
-            && params_match
-            && req1.headers == req2.headers
-            && req1.post_data == req2.post_data
-        {
-            ComparisonResult {
-                status: "match".to_string(),
-                details: "Full match".to_string(),
+struct DiffResult {
+    has_non_whitelisted_diff: bool,
+    has_whitelisted_diff: bool,
+}
+
+fn compare_headers_with_whitelist(
+    headers1: &HashMap<String, String>,
+    headers2: &HashMap<String, String>,
+    url: &str,
+    whitelist: &WhitelistConfig,
+) -> DiffResult {
+    let mut result = DiffResult {
+        has_non_whitelisted_diff: false,
+        has_whitelisted_diff: false,
+    };
+
+    let all_keys: HashSet<&String> = headers1.keys().chain(headers2.keys()).collect();
+
+    for key in all_keys {
+        let val1 = headers1.get(key);
+        let val2 = headers2.get(key);
+
+        if val1 != val2 {
+            if whitelist.is_header_whitelisted(key, url) {
+                result.has_whitelisted_diff = true;
+            } else {
+                result.has_non_whitelisted_diff = true;
             }
-        } else {
-            ComparisonResult {
-                status: "partial".to_string(),
-                details: "Partial match".to_string(),
+        }
+    }
+
+    result
+}
+
+fn compare_payload_with_whitelist(
+    payload1: &str,
+    payload2: &str,
+    url: &str,
+    whitelist: &WhitelistConfig,
+) -> DiffResult {
+    let mut result = DiffResult {
+        has_non_whitelisted_diff: false,
+        has_whitelisted_diff: false,
+    };
+
+    // Try to parse as JSON and compare keys
+    if let (Ok(json1), Ok(json2)) = (
+        serde_json::from_str::<serde_json::Value>(payload1),
+        serde_json::from_str::<serde_json::Value>(payload2),
+    ) {
+        compare_json_values(&json1, &json2, url, whitelist, &mut result, "");
+    } else {
+        // If not JSON, do simple string comparison
+        if payload1 != payload2 {
+            result.has_non_whitelisted_diff = true;
+        }
+    }
+
+    result
+}
+
+fn compare_json_values(
+    val1: &serde_json::Value,
+    val2: &serde_json::Value,
+    url: &str,
+    whitelist: &WhitelistConfig,
+    result: &mut DiffResult,
+    path: &str,
+) {
+    match (val1, val2) {
+        (serde_json::Value::Object(obj1), serde_json::Value::Object(obj2)) => {
+            let all_keys: HashSet<&String> = obj1.keys().chain(obj2.keys()).collect();
+
+            for key in all_keys {
+                let current_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{}.{}", path, key)
+                };
+
+                let v1 = obj1.get(key);
+                let v2 = obj2.get(key);
+
+                match (v1, v2) {
+                    (Some(val1), Some(val2)) => {
+                        if val1 != val2 {
+                            // Check if this key is whitelisted
+                            if whitelist.is_payload_key_whitelisted(key, url) {
+                                result.has_whitelisted_diff = true;
+                            } else {
+                                // Recursively check nested objects
+                                compare_json_values(val1, val2, url, whitelist, result, &current_path);
+                            }
+                        }
+                    }
+                    (None, Some(_)) | (Some(_), None) => {
+                        // Key exists in only one object
+                        if whitelist.is_payload_key_whitelisted(key, url) {
+                            result.has_whitelisted_diff = true;
+                        } else {
+                            result.has_non_whitelisted_diff = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (serde_json::Value::Array(arr1), serde_json::Value::Array(arr2)) => {
+            if arr1 != arr2 {
+                result.has_non_whitelisted_diff = true;
+            }
+        }
+        _ => {
+            if val1 != val2 {
+                result.has_non_whitelisted_diff = true;
             }
         }
     }
 }
 
 pub fn align_requests(requests1: &[HarRequest], requests2: &[HarRequest]) -> Vec<AlignedPair> {
+    align_requests_with_whitelist(requests1, requests2, None)
+}
+
+pub fn align_requests_with_whitelist(
+    requests1: &[HarRequest],
+    requests2: &[HarRequest],
+    whitelist: Option<&WhitelistConfig>,
+) -> Vec<AlignedPair> {
+    let default_config = WhitelistConfig::new();
+    let config = whitelist.unwrap_or(&default_config);
+
     // Simple alignment algorithm - match by path
     let mut aligned = Vec::new();
     let mut used2 = vec![false; requests2.len()];
@@ -255,7 +517,7 @@ pub fn align_requests(requests1: &[HarRequest], requests2: &[HarRequest]) -> Vec
                 aligned.push(AlignedPair {
                     index1: Some(i),
                     index2: Some(j),
-                    comparison: Some(compare_requests(req1, req2, false)),
+                    comparison: Some(compare_requests_with_whitelist(req1, req2, false, config)),
                 });
                 found_match = true;
                 break;
@@ -287,6 +549,16 @@ pub fn align_requests(requests1: &[HarRequest], requests2: &[HarRequest]) -> Vec
 
 // VS Code-like alignment using sequence matching
 pub fn align_requests_like_vscode(requests1: &[HarRequest], requests2: &[HarRequest]) -> Vec<AlignedPair> {
+    align_requests_like_vscode_with_whitelist(requests1, requests2, None)
+}
+
+pub fn align_requests_like_vscode_with_whitelist(
+    requests1: &[HarRequest],
+    requests2: &[HarRequest],
+    whitelist: Option<&WhitelistConfig>,
+) -> Vec<AlignedPair> {
+    let default_config = WhitelistConfig::new();
+    let config = whitelist.unwrap_or(&default_config);
 
     // Create path sequences for comparison
     let paths1: Vec<&str> = requests1.iter().map(|r| r.path.as_str()).collect();
@@ -300,7 +572,7 @@ pub fn align_requests_like_vscode(requests1: &[HarRequest], requests2: &[HarRequ
     while i < paths1.len() || j < paths2.len() {
         if i < paths1.len() && j < paths2.len() && paths1[i] == paths2[j] {
             // Match found
-            let comparison = Some(compare_requests(&requests1[i], &requests2[j], false));
+            let comparison = Some(compare_requests_with_whitelist(&requests1[i], &requests2[j], false, config));
             aligned.push(AlignedPair {
                 index1: Some(i),
                 index2: Some(j),
@@ -346,28 +618,38 @@ pub struct ComparisonSection {
     pub content1: String,
     pub content2: String,
     pub differences: Vec<DiffLine>,
+    pub whitelisted_keys: Vec<String>, // Keys/headers that are whitelisted
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiffLine {
     pub line_number: usize,
-    pub diff_type: String, // "same", "different", "missing"
+    pub diff_type: String, // "same", "different", "missing", "whitelisted"
     pub content: String,
 }
 
 pub fn create_detailed_comparison(req1: &HarRequest, req2: &HarRequest, keys_only: bool) -> DetailedComparison {
+    create_detailed_comparison_with_whitelist(req1, req2, keys_only, &WhitelistConfig::new())
+}
+
+pub fn create_detailed_comparison_with_whitelist(
+    req1: &HarRequest,
+    req2: &HarRequest,
+    keys_only: bool,
+    whitelist: &WhitelistConfig,
+) -> DetailedComparison {
     DetailedComparison {
-        general: create_general_section(req1, req2),
-        raw_request: create_raw_request_section(req1, req2),
-        headers: create_headers_section(req1, req2, keys_only),
-        payloads: create_payloads_section(req1, req2),
-        params: create_params_section(req1, req2, keys_only),
-        response: create_response_section(req1, req2, keys_only),
-        response_body: create_response_body_section(req1, req2),
+        general: create_general_section(req1, req2, whitelist),
+        raw_request: create_raw_request_section(req1, req2, whitelist),
+        headers: create_headers_section(req1, req2, keys_only, whitelist),
+        payloads: create_payloads_section(req1, req2, whitelist),
+        params: create_params_section(req1, req2, keys_only, whitelist),
+        response: create_response_section(req1, req2, keys_only, whitelist),
+        response_body: create_response_body_section(req1, req2, whitelist),
     }
 }
 
-fn create_general_section(req1: &HarRequest, req2: &HarRequest) -> ComparisonSection {
+fn create_general_section(req1: &HarRequest, req2: &HarRequest, _whitelist: &WhitelistConfig) -> ComparisonSection {
     let content1 = format!(
         "Index: {}\nMethod: {}\nURL: {}\nPath: {}\nResponse Status: {}",
         req1.index, req1.method, req1.url, req1.path, req1.response_status
@@ -380,35 +662,47 @@ fn create_general_section(req1: &HarRequest, req2: &HarRequest) -> ComparisonSec
     ComparisonSection {
         content1,
         content2,
-        differences: vec![], // React library handles diffing
+        differences: vec![],
+        whitelisted_keys: vec![],
     }
 }
 
-fn create_headers_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool) -> ComparisonSection {
+fn create_headers_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool, whitelist: &WhitelistConfig) -> ComparisonSection {
     let content1 = format_headers(&req1.headers);
     let content2 = format_headers(&req2.headers);
+
+    // Collect whitelisted header names
+    let mut whitelisted_keys = Vec::new();
+    let all_keys: HashSet<&String> = req1.headers.keys().chain(req2.headers.keys()).collect();
+    for key in all_keys {
+        if whitelist.is_header_whitelisted(key, &req1.url) {
+            whitelisted_keys.push(key.to_lowercase());
+        }
+    }
 
     ComparisonSection {
         content1,
         content2,
-        differences: vec![], // React library handles diffing
+        differences: vec![],
+        whitelisted_keys,
     }
 }
 
-fn create_params_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool) -> ComparisonSection {
+fn create_params_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool, _whitelist: &WhitelistConfig) -> ComparisonSection {
     let content1 = format_params(&req1.query_params);
     let content2 = format_params(&req2.query_params);
 
     ComparisonSection {
         content1,
         content2,
-        differences: vec![], // React library handles diffing
+        differences: vec![],
+        whitelisted_keys: vec![],
     }
 }
 
 
 
-fn create_response_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool) -> ComparisonSection {
+fn create_response_section(req1: &HarRequest, req2: &HarRequest, _keys_only: bool, whitelist: &WhitelistConfig) -> ComparisonSection {
     let content1 = format!(
         "Status: {}\n\nHeaders:\n{}\n\nBody:\n{}",
         req1.response_status,
@@ -422,25 +716,45 @@ fn create_response_section(req1: &HarRequest, req2: &HarRequest, _keys_only: boo
         req2.response_body.as_ref().map_or("No body".to_string(), |body| format_json_string(body))
     );
 
+    // Collect whitelisted response header names
+    let mut whitelisted_keys = Vec::new();
+    let all_keys: HashSet<&String> = req1.response_headers.keys().chain(req2.response_headers.keys()).collect();
+    for key in all_keys {
+        if whitelist.is_header_whitelisted(key, &req1.url) {
+            whitelisted_keys.push(key.to_lowercase());
+        }
+    }
+
     ComparisonSection {
         content1,
         content2,
-        differences: vec![], // React library handles diffing
+        differences: vec![],
+        whitelisted_keys,
     }
 }
 
-fn create_raw_request_section(req1: &HarRequest, req2: &HarRequest) -> ComparisonSection {
+fn create_raw_request_section(req1: &HarRequest, req2: &HarRequest, whitelist: &WhitelistConfig) -> ComparisonSection {
     let content1 = format_raw_request(req1);
     let content2 = format_raw_request(req2);
 
+    // Collect whitelisted header names for raw request
+    let mut whitelisted_keys = Vec::new();
+    let all_keys: HashSet<&String> = req1.headers.keys().chain(req2.headers.keys()).collect();
+    for key in all_keys {
+        if whitelist.is_header_whitelisted(key, &req1.url) {
+            whitelisted_keys.push(key.to_lowercase());
+        }
+    }
+
     ComparisonSection {
         content1,
         content2,
-        differences: vec![], // React library handles diffing
+        differences: vec![],
+        whitelisted_keys,
     }
 }
 
-fn create_payloads_section(req1: &HarRequest, req2: &HarRequest) -> Option<ComparisonSection> {
+fn create_payloads_section(req1: &HarRequest, req2: &HarRequest, whitelist: &WhitelistConfig) -> Option<ComparisonSection> {
     // Only create payloads section if at least one request has a payload
     if req1.post_data.is_some() || req2.post_data.is_some() {
         let content1 = req1.post_data.as_ref().map_or("No payload".to_string(), |body| {
@@ -459,13 +773,42 @@ fn create_payloads_section(req1: &HarRequest, req2: &HarRequest) -> Option<Compa
             }
         });
 
+        // Collect whitelisted payload keys
+        let mut whitelisted_keys = Vec::new();
+        if let (Some(data1), Some(data2)) = (&req1.post_data, &req2.post_data) {
+            if let (Ok(json1), Ok(json2)) = (
+                serde_json::from_str::<serde_json::Value>(data1),
+                serde_json::from_str::<serde_json::Value>(data2),
+            ) {
+                collect_whitelisted_json_keys(&json1, &json2, &req1.url, whitelist, &mut whitelisted_keys);
+            }
+        }
+
         Some(ComparisonSection {
             content1,
             content2,
-            differences: vec![], // React library handles diffing
+            differences: vec![],
+            whitelisted_keys,
         })
     } else {
         None
+    }
+}
+
+fn collect_whitelisted_json_keys(
+    val1: &serde_json::Value,
+    val2: &serde_json::Value,
+    url: &str,
+    whitelist: &WhitelistConfig,
+    result: &mut Vec<String>,
+) {
+    if let (serde_json::Value::Object(obj1), serde_json::Value::Object(obj2)) = (val1, val2) {
+        let all_keys: HashSet<&String> = obj1.keys().chain(obj2.keys()).collect();
+        for key in all_keys {
+            if whitelist.is_payload_key_whitelisted(key, url) {
+                result.push(key.to_lowercase());
+            }
+        }
     }
 }
 
@@ -574,7 +917,7 @@ fn sort_json_keys(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn create_response_body_section(req1: &HarRequest, req2: &HarRequest) -> Option<ComparisonSection> {
+fn create_response_body_section(req1: &HarRequest, req2: &HarRequest, whitelist: &WhitelistConfig) -> Option<ComparisonSection> {
     if req1.response_body.is_some() || req2.response_body.is_some() {
         let content1 = req1.response_body.as_ref().map_or("No response body".to_string(), |body| {
             format_json_string(body)
@@ -583,10 +926,22 @@ fn create_response_body_section(req1: &HarRequest, req2: &HarRequest) -> Option<
             format_json_string(body)
         });
 
+        // Collect whitelisted payload keys from response body
+        let mut whitelisted_keys = Vec::new();
+        if let (Some(body1), Some(body2)) = (&req1.response_body, &req2.response_body) {
+            if let (Ok(json1), Ok(json2)) = (
+                serde_json::from_str::<serde_json::Value>(body1),
+                serde_json::from_str::<serde_json::Value>(body2),
+            ) {
+                collect_whitelisted_json_keys(&json1, &json2, &req1.url, whitelist, &mut whitelisted_keys);
+            }
+        }
+
         Some(ComparisonSection {
             content1,
             content2,
-            differences: vec![], // React library handles diffing
+            differences: vec![],
+            whitelisted_keys,
         })
     } else {
         None
