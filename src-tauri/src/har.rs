@@ -564,14 +564,30 @@ pub fn align_requests_like_vscode_with_whitelist(
     let paths1: Vec<&str> = requests1.iter().map(|r| r.path.as_str()).collect();
     let paths2: Vec<&str> = requests2.iter().map(|r| r.path.as_str()).collect();
 
-    // Simple LCS-based alignment
+    // Improved LCS-based alignment
     let mut aligned = Vec::new();
     let mut i = 0;
     let mut j = 0;
 
     while i < paths1.len() || j < paths2.len() {
-        if i < paths1.len() && j < paths2.len() && paths1[i] == paths2[j] {
-            // Match found
+        if i >= paths1.len() {
+            // Exhausted list1, add remaining items from list2
+            aligned.push(AlignedPair {
+                index1: None,
+                index2: Some(j),
+                comparison: None,
+            });
+            j += 1;
+        } else if j >= paths2.len() {
+            // Exhausted list2, add remaining items from list1
+            aligned.push(AlignedPair {
+                index1: Some(i),
+                index2: None,
+                comparison: None,
+            });
+            i += 1;
+        } else if paths1[i] == paths2[j] {
+            // Match found at current position
             let comparison = Some(compare_requests_with_whitelist(&requests1[i], &requests2[j], false, config));
             aligned.push(AlignedPair {
                 index1: Some(i),
@@ -580,22 +596,73 @@ pub fn align_requests_like_vscode_with_whitelist(
             });
             i += 1;
             j += 1;
-        } else if i < paths1.len() && (j >= paths2.len() || !paths2[j..].contains(&paths1[i])) {
-            // Item only in first list
-            aligned.push(AlignedPair {
-                index1: Some(i),
-                index2: None,
-                comparison: None,
-            });
-            i += 1;
-        } else if j < paths2.len() {
-            // Item only in second list
-            aligned.push(AlignedPair {
-                index1: None,
-                index2: Some(j),
-                comparison: None,
-            });
-            j += 1;
+        } else {
+            // No match at current position - look ahead to decide what to do
+            let path1_in_list2 = paths2[j..].iter().position(|&p| p == paths1[i]);
+            let path2_in_list1 = paths1[i..].iter().position(|&p| p == paths2[j]);
+
+            match (path1_in_list2, path2_in_list1) {
+                (Some(pos1), Some(pos2)) => {
+                    // Both items appear later in the other list
+                    // Choose the one that appears sooner
+                    if pos1 <= pos2 {
+                        // Current item from list2 appears sooner in list1, so insert it as unmatched
+                        aligned.push(AlignedPair {
+                            index1: None,
+                            index2: Some(j),
+                            comparison: None,
+                        });
+                        j += 1;
+                    } else {
+                        // Current item from list1 appears sooner in list2, so insert it as unmatched
+                        aligned.push(AlignedPair {
+                            index1: Some(i),
+                            index2: None,
+                            comparison: None,
+                        });
+                        i += 1;
+                    }
+                }
+                (Some(_), None) => {
+                    // List1 item appears later in list2, but list2 item doesn't appear in list1
+                    // Insert list2 item as unmatched
+                    aligned.push(AlignedPair {
+                        index1: None,
+                        index2: Some(j),
+                        comparison: None,
+                    });
+                    j += 1;
+                }
+                (None, Some(_)) => {
+                    // List2 item appears later in list1, but list1 item doesn't appear in list2
+                    // Insert list1 item as unmatched
+                    aligned.push(AlignedPair {
+                        index1: Some(i),
+                        index2: None,
+                        comparison: None,
+                    });
+                    i += 1;
+                }
+                (None, None) => {
+                    // Neither item appears in the other list
+                    // Insert left item as unmatched
+                    aligned.push(AlignedPair {
+                        index1: Some(i),
+                        index2: None,
+                        comparison: None,
+                    });
+                    i += 1;
+                    // Also insert right item as unmatched if j is still in bounds
+                    if j < paths2.len() {
+                        aligned.push(AlignedPair {
+                            index1: None,
+                            index2: Some(j),
+                            comparison: None,
+                        });
+                        j += 1;
+                    }
+                }
+            }
         }
     }
 
