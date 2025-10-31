@@ -533,10 +533,21 @@ pub fn align_requests_with_whitelist(
         }
     }
 
-    // Add remaining requests from requests2
+    // Interleave unmatched requests from requests2 into their proper positions
+    // Instead of appending them all at the end
     for (j, _) in requests2.iter().enumerate() {
         if !used2[j] {
-            aligned.push(AlignedPair {
+            // Find the correct position to insert this unmatched right-side request
+            // It should go after the last pair with index2 < j, and before the first with index2 > j
+            let insert_pos = aligned.iter().position(|pair| {
+                if let Some(idx2) = pair.index2 {
+                    idx2 > j
+                } else {
+                    false
+                }
+            }).unwrap_or(aligned.len());
+
+            aligned.insert(insert_pos, AlignedPair {
                 index1: None,
                 index2: Some(j),
                 comparison: None,
