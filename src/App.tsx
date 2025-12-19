@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -391,7 +391,57 @@ function App() {
     }
   };
 
+  // Zoom functionality via keyboard shortcuts
+  useEffect(() => {
+    const MIN_ZOOM = 0.5;
+    const MAX_ZOOM = 2.0;
+    const ZOOM_STEP = 0.1;
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey) return;
+
+      const root = document.documentElement;
+      const currentZoom = parseFloat(root.style.getPropertyValue('--app-zoom') || '1');
+
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        const newZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
+        root.style.setProperty('--app-zoom', newZoom.toString());
+      } else if (e.key === '-') {
+        e.preventDefault();
+        const newZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
+        root.style.setProperty('--app-zoom', newZoom.toString());
+      } else if (e.key === '0') {
+        e.preventDefault();
+        root.style.setProperty('--app-zoom', '1');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Scroll speed multiplier for WebKitGTK/Wayland (Linux only)
+  useEffect(() => {
+    const isLinux = navigator.userAgent.includes('Linux');
+    if (!isLinux) return;
+
+    const SCROLL_MULTIPLIER = 0.3;
+
+    const handleWheel = (e: WheelEvent) => {
+      const target = e.target as HTMLElement;
+      const scrollable = target.closest('.requests-list, .diff-pane, .modal-body');
+
+      if (scrollable && e.deltaMode === 0) { // deltaMode 0 = pixels
+        e.preventDefault();
+        scrollable.scrollTop += e.deltaY * SCROLL_MULTIPLIER;
+        scrollable.scrollLeft += e.deltaX * SCROLL_MULTIPLIER;
+      }
+    };
+
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, []);
 
   return (
     <div className="app">

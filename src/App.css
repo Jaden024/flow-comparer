@@ -12,6 +12,7 @@
   --color-different: #da3633;
   --color-whitelisted: #8957e5;
   --hover-bg: #30363d;
+  --app-zoom: 1;
 }
 
 * {
@@ -31,6 +32,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  zoom: var(--app-zoom);
 }
 
 .app-header {
